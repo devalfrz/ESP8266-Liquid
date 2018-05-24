@@ -49,7 +49,7 @@ body{
   text-align: center;
 }
 
-.data .toggles a, input[type="submit"]{
+.data .toggles a, input[type="submit"], button#defaults{
   background-color: white;
   color: black;
   font-size: .8em;
@@ -59,9 +59,10 @@ body{
   text-decoration: none;
   width: 75%;
   margin: 5px auto;
+  cursor: pointer;
 }
 
-.data .toggles a:hover, input[type="submit"]:hover{
+.data .toggles a:hover, input[type="submit"]:hover, button#defaults:hover{
   color: white;
   background-color: black;
 }
@@ -149,6 +150,7 @@ Feed:           <span id="feeder"></span></pre>
           <h3>Feeder</h3>
           <label for="feeder_period">Period (seconds)</label><input name="feeder_period" id="feeder_period" required type="number">
           <label for="feeds">Feeds (times)</label><input name="feeds" id="feeds" required type="number"><br><br>
+          <button id="defaults">Load Defaults</button>
           <input value="Update" type="submit">
         </div>
       </form>
@@ -189,6 +191,17 @@ var updateVars = function(){
   
 }
 
+var loadDefaults = function(e){
+  e.preventDefault();
+  document.querySelector('input[name="pump_period"]').value = 3600;
+  document.querySelector('input[name="pump_on"]').value = 90;
+  document.querySelector('input[name="night_pump_on"]').value = 60;
+  document.querySelector('input[name="air_pump_period"]').value = 3600;
+  document.querySelector('input[name="air_pump_on"]').value = 3000;
+  document.querySelector('input[name="feeder_period"]').value = 14400;
+  document.querySelector('input[name="feeds"]').value = 4;
+}
+
 var init = function(){
   var toggles = document.querySelectorAll('a.toggle');
   
@@ -198,6 +211,7 @@ var init = function(){
   }
 
   document.querySelector('form').addEventListener("submit", saveData, true);
+  document.getElementById('defaults').addEventListener("click", loadDefaults, true);
 
   conn_status = 0;
   document.getElementById('status').innerHTML = " Loading... ";

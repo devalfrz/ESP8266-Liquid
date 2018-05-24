@@ -2,7 +2,6 @@
 TODO:
 servo
 responsive
-defaults
 Hookup
 */
 
