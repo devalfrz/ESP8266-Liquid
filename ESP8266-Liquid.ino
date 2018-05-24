@@ -13,6 +13,7 @@
 
   TODO:
   Hookup
+  Read Voltage
   Documentation
 */
 
@@ -27,7 +28,8 @@
 #include <DallasTemperature.h>
 
 /* Pinouts */
-#define LEVEL_PIN 16
+#define LEVEL_PIN_0 0
+#define LEVEL_PIN_1 14
 #define SERVO_PIN 2
 #define ONE_WIRE_BUS 4
 #define PUMP_PIN 12
@@ -61,7 +63,7 @@ uint8_t  feeds;
 uint8_t  day_time;
 
 /* Runtime vars */
-float temperature = 30.2;
+float temperature = 0u;
 uint32_t temp_= 0;
 uint32_t pump;
 uint32_t air_pump;
@@ -92,9 +94,10 @@ void updateLevel(){
   turned off as much time as possible.
   */
   // Turn on pullup only for an instant
-  pinMode(LEVEL_PIN,INPUT_PULLUP);
-  level = digitalRead(LEVEL_PIN);
-  pinMode(LEVEL_PIN,INPUT);
+  pinMode(LEVEL_PIN_0,INPUT_PULLUP);
+  level = !digitalRead(LEVEL_PIN_0);
+  digitalWrite(LED_BUILTIN,level);
+  pinMode(LEVEL_PIN_0,INPUT);
 }
 
 void updateTemperature(){
@@ -253,10 +256,8 @@ void handleRoot() {
         pump = (pump>pump_on)?pump_on:pump_period;
       else
         pump = (pump>night_pump_on)?night_pump_on:pump_period;
-      delay(1000);
     }else if(server.argName(i) == "air_pump"){
       air_pump = (air_pump>air_pump_on)?air_pump_on:air_pump_period;
-      delay(1000);
     }else if(server.argName(i) == "feeder"){
       feeder = (feeding)?feeder_period:feeder_on;
       feeding = !feeding;
@@ -438,8 +439,7 @@ void feed(void){
   /*
   Feed using servo
   */
-  
-  digitalWrite(LED_BUILTIN,LOW);
+
   int pos,i;
   servo.attach(SERVO_PIN);
   servo.write(SERVO_MIN);
@@ -460,7 +460,6 @@ void feed(void){
   
   servo.detach();
   digitalWrite(SERVO_PIN, LOW);
-  digitalWrite(LED_BUILTIN,HIGH);
 }
 
 
@@ -483,6 +482,7 @@ void setup(void) {
   digitalWrite(AIR_PUMP_PIN,LOW);
   pinMode(SERVO_PIN, OUTPUT);
   digitalWrite(SERVO_PIN,LOW);
+  
   delay(100);
 
   // Init WiFi
