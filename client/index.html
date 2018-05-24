@@ -350,6 +350,7 @@ var displayTime = function(var_name, count_up){
       response_data[var_name]--;
       var act_on = (var_name == 'pump' && !day_time)?response_data.night_pump_on:response_data[var_name+'_on'];
       if(act_on>response_data[var_name]){
+        if(document.getElementById(var_name).className != "active") updateData();
         document.getElementById(var_name).className = "active";
       }else{
         document.getElementById(var_name).className = "";

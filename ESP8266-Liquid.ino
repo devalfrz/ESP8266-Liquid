@@ -12,7 +12,8 @@
   Web interface for controlling everything.
 
   TODO:
-  Hookup
+  Reconnect
+  OTA Upgrade
   Read Voltage
   Documentation
 */
@@ -72,6 +73,7 @@ uint32_t feeder_on;
 uint8_t  feeding = 0;
 uint8_t  update_temp = 1;
 uint8_t  level = 0;
+uint8_t startup = 1;
 
 float temperature_buffer[TEMP_BUFFER_SIZE] = {20};
 ESP8266WebServer server(80);
@@ -96,7 +98,6 @@ void updateLevel(){
   // Turn on pullup only for an instant
   pinMode(LEVEL_PIN_0,INPUT_PULLUP);
   level = !digitalRead(LEVEL_PIN_0);
-  digitalWrite(LED_BUILTIN,level);
   pinMode(LEVEL_PIN_0,INPUT);
 }
 
@@ -250,15 +251,31 @@ void handleRoot() {
       feeds = server.arg(i).toInt();
       feeder_on = (getFeederOn()/1000) + 1;
     }else if(server.argName(i) == "day_time"){
-      day_time = !day_time;
+      if(server.arg(i)=="toggle")
+        day_time = !day_time;
+      else if(server.arg(i)=="1")
+        day_time = 1;
+      else if(server.arg(i)=="0")
+        day_time = 0;
     }else if(server.argName(i) == "pump"){
-      if(day_time)
-        pump = (pump>pump_on)?pump_on:pump_period;
-      else
-        pump = (pump>night_pump_on)?night_pump_on:pump_period;
+      if(server.arg(i)=="toggle"){
+        if(day_time)
+          pump = (pump>pump_on)?pump_on:pump_period;
+        else
+          pump = (pump>night_pump_on)?night_pump_on:pump_period;
+      }else if(server.arg(i)=="1"){
+        pump = (day_time)?pump_on:night_pump_on;
+      }else if(server.arg(i)=="0"){
+        pump = pump_period;
+      }
     }else if(server.argName(i) == "air_pump"){
-      air_pump = (air_pump>air_pump_on)?air_pump_on:air_pump_period;
-    }else if(server.argName(i) == "feeder"){
+      if(server.arg(i)=="toggle"){
+        air_pump = (air_pump>air_pump_on)?air_pump_on:air_pump_period;
+      }else if(server.arg(i)=="1"){
+        air_pump = air_pump_on;
+      }else if(server.arg(i)=="0"){
+        air_pump = air_pump_period;
+      }    }else if(server.argName(i) == "feeder"){
       feeder = (feeding)?feeder_period:feeder_on;
       feeding = !feeding;
     }
@@ -427,10 +444,14 @@ void timerISR(){
   /*
   Do this every second.
   */
-  digitalWrite(PUMP_PIN,processPump());
-  digitalWrite(AIR_PUMP_PIN,processAirPump());
-  if(feeder) feeder--;
-  processTemperature();
+  if(!startup){
+    digitalWrite(PUMP_PIN,processPump());
+    digitalWrite(AIR_PUMP_PIN,processAirPump());
+    if(feeder) feeder--;
+    processTemperature();
+  }else{
+    digitalWrite(LED_BUILTIN,!digitalRead(LED_BUILTIN));
+  }
 }
 
 
@@ -475,7 +496,7 @@ void setup(void) {
 
   // Init Pins
   pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN,HIGH);
+  digitalWrite(LED_BUILTIN,LOW);
   pinMode(PUMP_PIN, OUTPUT);
   digitalWrite(PUMP_PIN,LOW);
   pinMode(AIR_PUMP_PIN, OUTPUT);
@@ -484,6 +505,9 @@ void setup(void) {
   digitalWrite(SERVO_PIN,LOW);
   
   delay(100);
+
+  //Initialize Ticker every 0.1s
+  ticker.attach_ms(100, timerISR);
 
   // Init WiFi
   Serial.begin(115200);
@@ -507,9 +531,6 @@ void setup(void) {
   }
 
 
-  //Initialize Ticker every 1s
-  ticker.attach(1, timerISR);
-
 
   // Web Server
   server.on("/", handleRoot);
@@ -517,6 +538,12 @@ void setup(void) {
   server.onNotFound(handleNotFound);
   server.begin();
   Serial.println("HTTP server started");
+  
+  //Reattach Ticker every 1s
+  ticker.attach(1, timerISR);
+  startup = 0;
+ 
+  digitalWrite(LED_BUILTIN,HIGH);
 }
 
 void loop(void) {
