@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en-us">
+<head>
+    <meta http-equiv="content-type" content="text/html; charset=utf-8">
+    <title>Liquid 2.0</title>
+    <style>
+.header{
+  grid-area: header;
+  text-align: center;
+}
+.main{
+  grid-area: main;
+  text-align: left;
+}
+.footer{
+  grid-area: footer;
+  text-align: right;
+}
+
+body{
+  font-family: Verdana, Geneva, sans-serif;
+  background-color: lightblue;
+  display: grid;
+  grid-template-columns: auto;
+  grid-template-rows: 1fr 5fr 3fr;
+  grid-template-areas: 
+    "header"
+    "main"
+    "footer";
+}
+
+.data{
+  grid-area: data;
+  padding: 15px;
+}
+.data pre{
+  display: block;
+  text-align: left;
+  color: white;
+  background-color: black;
+  padding: 10px;
+}
+
+#graph svg{
+  width: 100%;
+}
+
+.data .toggles{
+  text-align: center;
+}
+
+.data .toggles a, input[type="submit"]{
+  background-color: white;
+  color: black;
+  font-size: .8em;
+  display: block;
+  border: solid 2px black;
+  padding: 4px;
+  text-decoration: none;
+  width: 75%;
+  margin: 5px auto;
+}
+
+.data .toggles a:hover, input[type="submit"]:hover{
+  color: white;
+  background-color: black;
+}
+
+span.active, span.ok{
+  color: black;
+  background-color: #00FF00;
+}
+
+span.night{
+  background-color: darkblue;
+  color: white;
+}
+
+span.day{
+  color: black;
+  background-color: cyan;
+}
+
+span.error{
+  background-color: #FF0000;
+  color: black;
+}
+
+.form_1{
+  grid-area: form_1;
+  padding: 15px;
+}
+
+.form_2{
+  grid-area: form_2;
+  padding: 15px;
+}
+
+form{
+  display: grid;
+  grid-template-columns: 1fr 3fr 3fr 3fr 1fr;
+  grid-template-rows: auto;
+  grid-template-areas: 
+    ". data form_1 form_2 .";
+}
+
+input[type="number"],input[type="text"]{
+  width: 100%;
+  box-sizing: border-box;
+  -webkit-box-sizing: border-box;
+  -moz-box-sizing: border-box;
+}
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1>Liquid 2.0</h1>
+    </div>
+    <div class="main">
+      <form method="POST" action=".">
+        <div class="data">
+        <pre>Status:         <span id="status"></span>
+Uptime:         <span id="uptime"></span>
+Level:          <span id="level"></span>
+Temperature:    <span id="temperature"></span>&#8451;
+Mode:           <span id="day_time"></span>
+Pump:           <span id="pump"></span>
+Air Pump:       <span id="air_pump"></span>
+Feed:           <span id="feeder"></span></pre>
+          <div id="graph"></div>
+          <h3>Toggle</h3>
+          <div class="toggles">
+            <a href=".?pump=toggle" class="toggle">Water Pump</a>
+            <a href=".?air_pump=toggle" class="toggle">Air Pump</a>
+            <a href=".?feeder=toggle" class="toggle">Feeder</a>
+            <a href=".?day_time=toggle" class="toggle">Day Time</a>
+          </div>
+        </div>
+        <div class="form_1">
+          <h3>Water Pump</h3>
+          <label for="pump_period">Period (seconds)</label><input name="pump_period" id="pump_period" required type="number">
+          <label for="pump_on">Day Pump On (seconds)</label><input name="pump_on" id="pump_on" required type="number">
+          <label for="night_pump_on">Night Pump On (seconds)</label><input name="night_pump_on" id="night_pump_on" required type="number">
+          <h3>Air Pump</h3>
+          <label for="air_pump_period">Period (seconds)</label><input name="air_pump_period" id="air_pump_period" required type="number">
+          <label for="air_pump_on">Pump On (seconds)</label><input name="air_pump_on" id="air_pump_on" required type="number">
+        </div>
+        <div class="form_2">
+          <h3>Feeder</h3>
+          <label for="feeder_period">Period (seconds)</label><input name="feeder_period" id="feeder_period" required type="number">
+          <label for="feeds">Feeds (times)</label><input name="feeds" id="feeds" required type="number"><br><br>
+          <input value="Update" type="submit">
+        </div>
+      </form>
+    </div>
+    <div class="footer">
+      footer
+    </div>
+<script>
+var url = 'http://192.168.0.72/';
+
+var conn_status = 0;
+
+var response_data = {};
+
+var updateVars = function(){
+  document.querySelector('input[name="pump_period"]').value = response_data.pump_period;
+  document.querySelector('input[name="pump_on"]').value = response_data.pump_on;
+  document.querySelector('input[name="night_pump_on"]').value = response_data.night_pump_on;
+  document.querySelector('input[name="air_pump_period"]').value = response_data.air_pump_period;
+  document.querySelector('input[name="air_pump_on"]').value = response_data.air_pump_on;
+  document.querySelector('input[name="feeder_period"]').value = response_data.feeder_period;
+  document.querySelector('input[name="feeds"]').value = response_data.feeds;
+  if(response_data.level){
+      document.getElementById('level').innerHTML = " OK ";
+      document.getElementById('level').className = "ok";
+  }else{
+      document.getElementById('level').innerHTML = " ERROR ";
+      document.getElementById('level').className = "error";
+  }
+  if(response_data.day_time){
+      document.getElementById('day_time').innerHTML = " Day Time ";
+      document.getElementById('day_time').className = "day";
+  }else{
+      document.getElementById('day_time').innerHTML = " Night Time ";
+      document.getElementById('day_time').className = "night";
+  }
+  document.getElementById('temperature').innerHTML = response_data.temperature;
+  
+}
+
+var init = function(){
+  var toggles = document.querySelectorAll('a.toggle');
+  
+  for(var i = 0; i<toggles.length; i++){
+    toggles[i].addEventListener("click", toggle, true);
+    //console.log(toggles[i]);
+  }
+
+  document.querySelector('form').addEventListener("submit", saveData, true);
+
+  conn_status = 0;
+  document.getElementById('status').innerHTML = " Loading... ";
+  document.getElementById('status').className = "error";
+
+  var xhttp = new XMLHttpRequest();
+  xhttp.onreadystatechange = function() {
+    if (this.readyState == 4 && this.status == 200) {
+      response_data = JSON.parse(xhttp.response);
+      displayTime('uptime',true);
+      displayTime('pump',false);
+      displayTime('air_pump',false);
+      displayTime('feeder',false);
+      updateVars();
+      conn_status = 1;
+      document.getElementById('status').innerHTML = " Online ";
+      document.getElementById('status').className = "ok";
+    }
+  };
+  xhttp.open("GET", url, true);
+  xhttp.send();
+  updateGraph();
+  setInterval(function(){ updateGraph(); }, 108000);
+}
+
+var saveData = function(e){
+  e.preventDefault();
+  data = new FormData(document.querySelector('form'));
+
+  conn_status = 0;
+  document.getElementById('status').innerHTML = " Loading... ";
+  document.getElementById('status').className = "error";
+
+  var xhttp = new XMLHttpRequest();
+  xhttp.onreadystatechange = function() {
+    if (this.readyState == 4 && this.status == 200) {
+      response_data = JSON.parse(xhttp.response);
+      //location.reload();
+      updateVars();
+      conn_status = 1;
+      document.getElementById('status').innerHTML = " Online ";
+      document.getElementById('status').className = "ok";
+    }
+  };
+  xhttp.open("POST", url, true);
+  xhttp.send(data);
+}
+
+var updateData = function(){
+
+  conn_status = 0;
+  document.getElementById('status').innerHTML = " Loading... ";
+  document.getElementById('status').className = "error";
+
+  var xhttp = new XMLHttpRequest();
+  xhttp.onreadystatechange = function() {
+    if (this.readyState == 4 && this.status == 200) {
+      response_data = JSON.parse(xhttp.response);
+      //location.reload();
+      updateVars();
+      conn_status = 1;
+      document.getElementById('status').innerHTML = " Online ";
+      document.getElementById('status').className = "ok";
+    }
+  };
+  xhttp.open("GET", url, true);
+  xhttp.send();
+}
+
+var updateGraph = function(){
+
+  conn_status = 0;
+  document.getElementById('status').innerHTML = " Loading... ";
+  document.getElementById('status').className = "error";
+
+  var xhttp = new XMLHttpRequest();
+  xhttp.onreadystatechange = function() {
+    if (this.readyState == 4 && this.status == 200) {
+      document.getElementById('graph').innerHTML = xhttp.response;
+      conn_status = 1;
+      document.getElementById('status').innerHTML = " Online ";
+      document.getElementById('status').className = "ok";
+    }
+  };
+  xhttp.open("GET", url+'temperature.svg', true);
+  xhttp.send();
+}
+
+var toggle = function(e){
+  e.preventDefault();
+
+  params = this.href ? this.href.split('?')[1] : window.location.search.slice(1);
+
+  conn_status = 0;
+  document.getElementById('status').innerHTML = " Loading... ";
+  document.getElementById('status').className = "error";
+
+  var xhttp = new XMLHttpRequest();
+  xhttp.onreadystatechange = function() {
+    if (this.readyState == 4 && this.status == 200) {
+      response_data = JSON.parse(xhttp.response);
+      //location.reload();
+      updateVars();
+      document.getElementById('status').innerHTML = " Online ";
+      document.getElementById('status').className = "ok";
+    }
+    console.log(this.status);
+  };
+  xhttp.open("GET", url+'?'+params, true);
+  xhttp.send();
+}
+
+var getTimeStr = function(seconds){
+    var date = new Date(1970,0,1);
+    date.setSeconds(seconds);
+    return date.toTimeString().replace(/.*(\d{2}:\d{2}:\d{2}).*/, '$1');
+}
+
+var displayTime = function(var_name, count_up){
+  if(count_up){
+    response_data[var_name]++;
+  }else{
+    if(response_data[var_name]){
+      response_data[var_name]--;
+      var act_on = (var_name == 'pump' && !day_time)?response_data.night_pump_on:response_data[var_name+'_on'];
+      if(act_on>response_data[var_name]){
+        document.getElementById(var_name).className = "active";
+      }else{
+        document.getElementById(var_name).className = "";
+      }
+    }else{
+      if(document.querySelector('input:focus')==null){
+        //location.reload();
+        updateData();
+      }
+    }
+  }
+  document.getElementById(var_name).innerHTML = getTimeStr(response_data[var_name]);
+  setTimeout(function(){ displayTime(var_name,count_up); }, 1000);
+}
+
+init();
+</script>
+</body></html>
