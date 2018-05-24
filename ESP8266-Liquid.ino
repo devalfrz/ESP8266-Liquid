@@ -1,7 +1,19 @@
 /*
-TODO:
-servo
-Hookup
+  Liquid: Automating watering plants and fish feeding. This is the new
+  version of the Liquid-Arduino-Yun
+  (https://github.com/devalfrz/Liquid-Arduino-Yun), now working with
+  the ESP8266.
+  
+  Alfredo Rius
+  alfredo.rius@gmail.com
+  
+  v2.0   2018-05-24
+  Developed new version for the project.
+  Web interface for controlling everything.
+
+  TODO:
+  Hookup
+  Documentation
 */
 
 #include <ESP8266WiFi.h>
@@ -10,10 +22,18 @@ Hookup
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
 #include <EEPROM.h>
+#include <Servo.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+/* Pinouts */
+#define LEVEL_PIN 16
+#define SERVO_PIN 2
+#define ONE_WIRE_BUS 4
+#define PUMP_PIN 12
+#define AIR_PUMP_PIN 13
 
 /* Constants */
-#define LEVEL_PIN 16
-
 #define SERVO_MAX 100
 #define SERVO_MIN 30
 #define SERVO_STEP 1
@@ -21,8 +41,8 @@ Hookup
 #define SERVO_START_TIME 100
 #define SERVO_STOP_TIME 1000
 
-#define TEMP_BUFFER_SIZE 144 //3 days every 30 min
 #define TEMP_PERIOD 30*60    // 30 minutes
+#define TEMP_BUFFER_SIZE 144 //3 days every 30 min
 
 const char *ssid = "Eileen";
 const char *password = "You-are-far-too-young-and-clever";
@@ -48,16 +68,47 @@ uint32_t air_pump;
 uint32_t feeder;
 uint32_t feeder_on;
 uint8_t  feeding = 0;
+uint8_t  update_temp = 1;
+uint8_t  level = 0;
+
 float temperature_buffer[TEMP_BUFFER_SIZE] = {20};
 ESP8266WebServer server(80);
-Ticker blinker;
+Ticker ticker;
+Servo servo;
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
 
 
-uint32_t get_feeder_on(){
+uint32_t getFeederOn(){
+  /*
+  Make a rough estimate of the time the feeder will be working.
+  */
   return ((servo_cycle_time*feeds) + SERVO_START_TIME + SERVO_STOP_TIME);
 }
 
+void updateLevel(){
+  /*
+  In case that the sensor is submerged under water, keep the pullup
+  turned off as much time as possible.
+  */
+  // Turn on pullup only for an instant
+  pinMode(LEVEL_PIN,INPUT_PULLUP);
+  level = digitalRead(LEVEL_PIN);
+  pinMode(LEVEL_PIN,INPUT);
+}
+
+void updateTemperature(){
+  /*
+  Get information from the OneWire sensor (DS18B20).
+  */
+  sensors.requestTemperatures(); // Send the command to get temperatures
+  temperature = sensors.getTempCByIndex(0);
+}
+
 void updateTemperatureBuffer(){
+  /*
+  Append the last reading to the buffer.
+  */
   for(int i = 1;i<TEMP_BUFFER_SIZE;i++){
     temperature_buffer[i-1] = temperature_buffer[i];
   }
@@ -65,7 +116,9 @@ void updateTemperatureBuffer(){
 }
 
 void eepromRead(void){
-  uint8_t tmp;
+  /*
+  Get variables from EEPROM
+  */
 
   pump_period = EEPROM.read(0);
   pump_period <<= 8;
@@ -117,7 +170,7 @@ void eepromRead(void){
 
   feeds = EEPROM.read(24);
 
-  feeder_on = (get_feeder_on()/1000) + 1;
+  feeder_on = (getFeederOn()/1000) + 1;
   
   day_time = EEPROM.read(25);
 
@@ -127,7 +180,9 @@ void eepromRead(void){
 }
 
 void eepromWrite(void){
-  uint32_t tmp = 0;
+  /*
+  Save variables on EEPROM
+  */
 
   EEPROM.write(0,uint8_t(pump_period>>24));
   EEPROM.write(1,uint8_t(pump_period>>16));
@@ -167,7 +222,11 @@ void eepromWrite(void){
 
 
 void handleRoot() {
-  
+  /*
+  Handle Home
+  */
+
+  //Check for parameters
   for (uint8_t i = 0; i < server.args(); i++) {
     if(server.argName(i) == "pump_period"){
       pump_period = server.arg(i).toInt();
@@ -186,7 +245,7 @@ void handleRoot() {
       if(feeder>feeder_period) feeder = feeder_period;
     }else if(server.argName(i) == "feeds"){
       feeds = server.arg(i).toInt();
-      feeder_on = (get_feeder_on()/1000) + 1;
+      feeder_on = (getFeederOn()/1000) + 1;
     }else if(server.argName(i) == "day_time"){
       day_time = !day_time;
     }else if(server.argName(i) == "pump"){
@@ -203,11 +262,19 @@ void handleRoot() {
       feeding = !feeding;
     }
   }
-  eepromWrite();
 
+    
+  update_temp = 1;
+  updateLevel();
   uint32_t uptime = millis() / 1000;
+  
+  if(server.method() != HTTP_GET){
+    // Save variables if POST
+    eepromWrite();
+  }
+
+  // Print JSON response
   char temp[310];
-  pinMode(LEVEL_PIN,INPUT_PULLUP);
   snprintf(temp, 310,
 "{\
 \"level\":%d,\
@@ -226,7 +293,7 @@ void handleRoot() {
 \"air_pump\":%d,\
 \"feeder\":%d\
 }"
-    ,digitalRead(LEVEL_PIN),
+    ,level,
     temperature,
     day_time,
     pump_period,
@@ -242,125 +309,14 @@ void handleRoot() {
     air_pump,
     feeder);
 
-  pinMode(LEVEL_PIN,INPUT);
-
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.send(200, "application/json", temp);
-
-}
-
-void handleNotFound() {
-  String message = "File Not Found\n\n";
-  message += "URI: ";
-  message += server.uri();
-  message += "\nMethod: ";
-  message += (server.method() == HTTP_GET) ? "GET" : "POST";
-  message += "\nArguments: ";
-  message += server.args();
-  message += "\n";
-
-  for (uint8_t i = 0; i < server.args(); i++) {
-    message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
-  }
-  
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.send(404, "text/plain", message);
-}
-
-uint8_t process_pump_status(){
-  uint32_t p_on = (day_time)?pump_on:night_pump_on;
-  if(pump){
-    pump--;
-    return pump<p_on;
-  }
-  pump = pump_period;
-  return LOW;
-}
-
-uint8_t process_air_pump_status(){
-  if(air_pump){
-    air_pump--;
-    return air_pump<air_pump_on;
-  }
-  air_pump = air_pump_period;
-  return 0;
-}
-
-void processTemperature(){
-  if(temp_){
-    temp_--;
-  }else{
-    temp_ = TEMP_PERIOD;
-    updateTemperatureBuffer();
-  }
-}
-
-void timerISR(){
-  process_pump_status();
-  process_air_pump_status();
-  if(feeder) feeder--;
-  processTemperature();
-}
-
-
-void setup(void) {
-  // Load data
-  EEPROM.begin(512);
-  eepromRead();
-  
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN,HIGH);
-  Serial.begin(115200);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  Serial.println("");
-
-  // Wait for connection
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  Serial.println("");
-  Serial.print("Connected to ");
-  Serial.println(ssid);
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
-
-  if (MDNS.begin("esp8266")) {
-    Serial.println("MDNS responder started");
-  }
-
-  //Initialize Ticker every 0.5s
-  blinker.attach(1, timerISR);
-
-  server.on("/", handleRoot);
-  server.on("/temperature.svg", drawGraph);
-
-  server.onNotFound(handleNotFound);
-  server.begin();
-  Serial.println("HTTP server started");
-}
-
-void feed(void){
-}
-
-void loop(void) {
-  server.handleClient();
-  if(!feeding && feeder<feeder_on){
-    feeding = 1;
-  }
-  if(feeding){
-    digitalWrite(LED_BUILTIN,LOW);
-    delay(get_feeder_on());
-    digitalWrite(LED_BUILTIN,HIGH);
-    feeder = feeder_period;
-    feeding = 0;
-  }
-  delay(10);
 }
 
 void drawGraph() {
+  /*
+  Render temperature graph.
+  */
   String out = "";
   float x = 10;
   char temp[200];
@@ -386,3 +342,200 @@ void drawGraph() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.send(200, "image/svg+xml", out);
 }
+
+void handleNotFound() {
+  /*
+  Handle Not Found
+  */
+  String message = "File Not Found\n\n";
+  message += "URI: ";
+  message += server.uri();
+  message += "\nMethod: ";
+  message += (server.method() == HTTP_GET) ? "GET" : "POST";
+  message += "\nArguments: ";
+  message += server.args();
+  message += "\n";
+
+  for (uint8_t i = 0; i < server.args(); i++) {
+    message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
+  }
+  
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.send(404, "text/plain", message);
+}
+
+uint8_t processPump(){
+  /*
+  Use night time or day time pump on times.
+  */
+  uint32_t p_on = (day_time)?pump_on:night_pump_on;
+  if(pump){
+    pump--;
+    if(pump==p_on){
+      updateLevel();
+    }
+    // Only turn on pump if level is over the limit.
+    return pump<p_on && level;
+  }
+  pump = pump_period;
+  return LOW;
+}
+
+uint8_t processAirPump(){
+  /*
+  Turn air pump on/off.
+  */
+  if(air_pump){
+    air_pump--;
+    return air_pump<air_pump_on;
+  }
+  air_pump = air_pump_period;
+  return 0;
+}
+
+void processTemperature(){
+  /*
+  Update the tempearture buffer every TEMP_PERIOD time. Update
+  temperature 1 second before capturing.
+  */
+  if(temp_){
+    temp_--;
+    if(!temp_) update_temp = 1;
+  }else{
+    temp_ = TEMP_PERIOD;
+    updateTemperatureBuffer();
+  }
+}
+
+void processFeeder(){
+  /*
+  Activate feeder.
+  */
+  if(!feeding && feeder<feeder_on){
+    feeding = 1;
+  }
+  if(feeding){
+    feed();
+    feeder = feeder_period;
+    feeding = 0;
+  }
+}
+
+
+void timerISR(){
+  /*
+  Do this every second.
+  */
+  digitalWrite(PUMP_PIN,processPump());
+  digitalWrite(AIR_PUMP_PIN,processAirPump());
+  if(feeder) feeder--;
+  processTemperature();
+}
+
+
+
+void feed(void){
+  /*
+  Feed using servo
+  */
+  
+  digitalWrite(LED_BUILTIN,LOW);
+  int pos,i;
+  servo.attach(SERVO_PIN);
+  servo.write(SERVO_MIN);
+  delay(SERVO_START_TIME);
+  
+  // Feed fish
+  for(i=0;i<feeds;i++){
+    for(pos = SERVO_MIN; pos <= SERVO_MAX; pos += SERVO_STEP){
+      servo.write(pos);
+      delay(SERVO_STEP_TIME);
+    }
+    for(pos = SERVO_MAX; pos >= SERVO_MIN; pos -= SERVO_STEP){
+      servo.write(pos);
+      delay(SERVO_STEP_TIME);
+    }
+  }
+  delay(SERVO_STOP_TIME);
+  
+  servo.detach();
+  digitalWrite(SERVO_PIN, LOW);
+  digitalWrite(LED_BUILTIN,HIGH);
+}
+
+
+
+void setup(void) {
+  /*
+  Init
+  */
+  
+  // Load data
+  EEPROM.begin(512);
+  eepromRead();
+
+  // Init Pins
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN,HIGH);
+  pinMode(PUMP_PIN, OUTPUT);
+  digitalWrite(PUMP_PIN,LOW);
+  pinMode(AIR_PUMP_PIN, OUTPUT);
+  digitalWrite(AIR_PUMP_PIN,LOW);
+  pinMode(SERVO_PIN, OUTPUT);
+  digitalWrite(SERVO_PIN,LOW);
+  delay(100);
+
+  // Init WiFi
+  Serial.begin(115200);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  Serial.println("");
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.print("Connected to ");
+  Serial.println(ssid);
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+
+  if (MDNS.begin("esp8266")) {
+    Serial.println("MDNS responder started");
+  }
+
+
+  //Initialize Ticker every 1s
+  ticker.attach(1, timerISR);
+
+
+  // Web Server
+  server.on("/", handleRoot);
+  server.on("/temperature.svg", drawGraph);
+  server.onNotFound(handleNotFound);
+  server.begin();
+  Serial.println("HTTP server started");
+}
+
+void loop(void) {
+  /*
+  Loop forever
+  */
+  
+  // Check server requests.
+  server.handleClient();
+  
+  // Feeder
+  processFeeder();
+
+  // Update temperature sensor if requested
+  if(update_temp){
+    updateTemperature();
+    update_temp = 0;
+  }
+  delay(10);
+}
+
+
