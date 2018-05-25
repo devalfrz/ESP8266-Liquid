@@ -1,11 +1,16 @@
 /*
-  Liquid: Automating watering plants and fish feeding. This is the new
-  version of the Liquid-Arduino-Yun
-  (https://github.com/devalfrz/Liquid-Arduino-Yun), now working with
-  the ESP8266.
+  Liquid: Automating watering plants and fish feeding.
+
+  https://github.com/devalfrz/ESP8266-Liquid
+
+  This is the new version of the Liquid-Arduino-Yun
+  (https://github.com/devalfrz/Liquid-Arduino-Yun)
   
   Alfredo Rius
   alfredo.rius@gmail.com
+  
+  v2.1   2018-05-25
+  Added voltage and firmware version to the API.
   
   v2.0   2018-05-24
   Developed new version for the project.
@@ -14,9 +19,11 @@
   TODO:
   Reconnect
   OTA Upgrade
-  Read Voltage
   Documentation
 */
+
+#define FIRMWARE_VERSION "v2.1"
+#define FIRMWARE_DATE    "2018-05-25"
 
 #include <ESP8266WiFi.h>
 #include <Ticker.h>
@@ -29,12 +36,13 @@
 #include <DallasTemperature.h>
 
 /* Pinouts */
-#define LEVEL_PIN_0 0
-#define LEVEL_PIN_1 14
+#define LEVEL_PIN_1 0
+#define LEVEL_PIN_2 14
 #define SERVO_PIN 2
 #define ONE_WIRE_BUS 4
 #define PUMP_PIN 12
 #define AIR_PUMP_PIN 13
+#define VOLTAGE_PIN A0
 
 /* Constants */
 #define SERVO_MAX 100
@@ -44,38 +52,47 @@
 #define SERVO_START_TIME 100
 #define SERVO_STOP_TIME 1000
 
-#define TEMP_PERIOD 30*60    // 30 minutes
-#define TEMP_BUFFER_SIZE 144 //3 days every 30 min
+#define TEMP_PERIOD 30*60        // 30 minutes
+#define TEMP_BUFFER_SIZE 144     // 3 days every 30 min
+#define VOLTAGE_PERIOD 3*60      // 3 minutes
+#define VOLTAGE_BUFFER_SIZE 480  // 24 hrs every 3 minutes
+#define VOLTAGE_CONST 0.00538153 //0.0048828  // 5/1024
+#define GRAPH_WIDTH 400
+#define GRAPH_HEIGHT 150
+#define GRAPH_PADDING 10
 
 const char *ssid = "Eileen";
 const char *password = "You-are-far-too-young-and-clever";
 uint32_t servo_cycle_time = (SERVO_MAX-SERVO_MIN)*SERVO_STEP*SERVO_STEP_TIME;
-const float temp_x_interval = (380.0/TEMP_BUFFER_SIZE);
+const float temp_x_interval = ((float)(GRAPH_WIDTH-(2*GRAPH_PADDING))/TEMP_BUFFER_SIZE);
+const float voltage_x_interval = ((float)(GRAPH_WIDTH-(2*GRAPH_PADDING))/VOLTAGE_BUFFER_SIZE);
 
 
 /* EEPROM vars */
-uint32_t pump_period;
-uint32_t pump_on;
-uint32_t night_pump_on;
-uint32_t air_pump_period;
-uint32_t air_pump_on;
-uint32_t feeder_period;
-uint8_t  feeds;
-uint8_t  day_time;
+uint32_t pump_period;      // Pump period (seconds)
+uint32_t pump_on;          // Pump on threshold (seconds)
+uint32_t night_pump_on;    // Pump on threshold during night time (seconds)
+uint32_t air_pump_period;  // Air pump period (seconds)
+uint32_t air_pump_on;      // Air pump on threshold (seconds)
+uint32_t feeder_period;    // Feeder period (seconds)
+uint8_t  feeds;            // Times the feeder will work every period
+uint8_t  day_time;         // Day time flag
 
 /* Runtime vars */
-float temperature = 0u;
-uint32_t temp_= 0;
-uint32_t pump;
-uint32_t air_pump;
-uint32_t feeder;
-uint32_t feeder_on;
-uint8_t  feeding = 0;
-uint8_t  update_temp = 1;
-uint8_t  level = 0;
-uint8_t startup = 1;
+float    temperature = 0;  // Last temperature reading (Celcius)
+uint32_t temp_= 0;         // Temperature buffer countdown
+uint32_t voltage_= 0;      // Voltage buffer countdown
+uint32_t pump;             // Pump countdown
+uint32_t air_pump;         // Air pump countdown
+uint32_t feeder;           // Feeder countdown
+uint32_t feeder_on;        // Feeder on time (rough estimate)
+uint8_t  feeding = 0;      // Feeder status flag
+uint8_t  update_temp = 1;  // Update temperature flag
+uint8_t  level = 0;        // Last level status
+uint8_t  startup = 1;      // Startup flag
 
-float temperature_buffer[TEMP_BUFFER_SIZE] = {20};
+float temperature_buffer[TEMP_BUFFER_SIZE];
+float voltage_buffer[VOLTAGE_BUFFER_SIZE];
 ESP8266WebServer server(80);
 Ticker ticker;
 Servo servo;
@@ -96,9 +113,9 @@ void updateLevel(){
   turned off as much time as possible.
   */
   // Turn on pullup only for an instant
-  pinMode(LEVEL_PIN_0,INPUT_PULLUP);
-  level = !digitalRead(LEVEL_PIN_0);
-  pinMode(LEVEL_PIN_0,INPUT);
+  pinMode(LEVEL_PIN_2,INPUT_PULLUP);
+  level = !digitalRead(LEVEL_PIN_2);
+  pinMode(LEVEL_PIN_2,INPUT);
 }
 
 void updateTemperature(){
@@ -117,6 +134,20 @@ void updateTemperatureBuffer(){
     temperature_buffer[i-1] = temperature_buffer[i];
   }
   temperature_buffer[TEMP_BUFFER_SIZE-1] = temperature;
+}
+
+float getVoltage(){
+  return (float)analogRead(VOLTAGE_PIN)*VOLTAGE_CONST;
+}
+
+void updateVoltageBuffer(){
+  /*
+  Append the last reading to the buffer.
+  */
+  for(int i = 1;i<VOLTAGE_BUFFER_SIZE;i++){
+    voltage_buffer[i-1] = voltage_buffer[i];
+  }
+  voltage_buffer[VOLTAGE_BUFFER_SIZE-1] = getVoltage();
 }
 
 void eepromRead(void){
@@ -290,13 +321,16 @@ void handleRoot() {
     // Save variables if POST
     eepromWrite();
   }
-
+  
   // Print JSON response
-  char temp[310];
-  snprintf(temp, 310,
+  char temp[350];
+  snprintf(temp, 350,
 "{\
+\"firmware\":\"%s\",\
+\"firmware_date\":\"%s\",\
 \"level\":%d,\
 \"temperature\":%02.1f,\
+\"voltage\":%01.3f,\
 \"day_time\":%d,\
 \"pump_period\":%d,\
 \"pump_on\":%d,\
@@ -311,8 +345,11 @@ void handleRoot() {
 \"air_pump\":%d,\
 \"feeder\":%d\
 }"
-    ,level,
+    ,FIRMWARE_VERSION,
+    FIRMWARE_DATE,
+    level,
     temperature,
+    getVoltage(),
     day_time,
     pump_period,
     pump_on,
@@ -331,7 +368,7 @@ void handleRoot() {
   server.send(200, "application/json", temp);
 }
 
-void drawGraph() {
+void drawTemperatureGraph() {
   /*
   Render temperature graph.
   */
@@ -341,19 +378,55 @@ void drawGraph() {
   out += "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" viewBox=\"0 0 400 150\">\n";
   out += "<rect width=\"400\" height=\"150\" fill=\"rgb(255, 255, 255, 0.8)\" stroke-width=\"3\" stroke=\"rgb(0, 0, 0)\" />\n";
   out += "<text x=\"10\" y=\"20\" fill=\"black\">Temperature</text>\n";
-  out += "<g stroke=\"black\"><line x1=\"10\" y1=\"140\" x2=\"380\" y2=\"140\" stroke-width=\"1\" /></g>\n";
-  out += "<g stroke=\"black\"><line x1=\"10\" y1=\"107.5\" x2=\"380\" y2=\"107.5\" stroke-width=\"1\" /></g>\n";
-  out += "<g stroke=\"black\"><line x1=\"10\" y1=\"75\" x2=\"380\" y2=\"75\" stroke-width=\"1\" /></g>\n";
-  out += "<g stroke=\"black\"><line x1=\"10\" y1=\"42.5\" x2=\"380\" y2=\"42.5\" stroke-width=\"1\" /></g>\n";
-  out += "<g stroke=\"black\"><line x1=\"130\" y1=\"10\" x2=\"380\" y2=\"10\" stroke-width=\"1\" /></g>\n";
+  out += "<g stroke=\"black\"><line x1=\"10\" y1=\"140\" x2=\"390\" y2=\"140\" stroke-width=\"1\" /></g>\n";
+  out += "<text x=\"10\" y=\"134\" fill=\"black\">0</text>\n";
+  out += "<g stroke=\"black\"><line x1=\"10\" y1=\"107.5\" x2=\"390\" y2=\"107.5\" stroke-width=\"1\" /></g>\n";
+  out += "<text x=\"10\" y=\"101.5\" fill=\"black\">10</text>\n";
+  out += "<g stroke=\"black\"><line x1=\"10\" y1=\"75\" x2=\"390\" y2=\"75\" stroke-width=\"1\" /></g>\n";
+  out += "<text x=\"10\" y=\"69\" fill=\"black\">20</text>\n";
+  out += "<g stroke=\"black\"><line x1=\"10\" y1=\"42.5\" x2=\"390\" y2=\"42.5\" stroke-width=\"1\" /></g>\n";
+  out += "<text x=\"10\" y=\"36.5\" fill=\"black\">30</text>\n";
+  out += "<g stroke=\"black\"><line x1=\"130\" y1=\"10\" x2=\"390\" y2=\"10\" stroke-width=\"1\" /></g>\n";
   out += "<g stroke=\"blue\">\n";
   float y = temperature_buffer[0];
   for (int i = 1; i < TEMP_BUFFER_SIZE; i++) {
     float y2 = temperature_buffer[i];
-    sprintf(temp, "<line x1=\"%f\" y1=\"%f\" x2=\"%f\" y2=\"%f\" stroke-width=\"1\" />\n", x, 140 - (y*3.25), x + temp_x_interval, 140 - (y2*3.25));
+    sprintf(temp, "<line x1=\"%.2f\" y1=\"%.2f\" x2=\"%.2f\" y2=\"%.2f\" stroke-width=\"1\" />\n", x, GRAPH_HEIGHT - GRAPH_PADDING - (y*3.25), x + temp_x_interval, GRAPH_HEIGHT - GRAPH_PADDING - (y2*3.25));
     out += temp;
     y = y2;
     x += temp_x_interval;
+  }
+  out += "</g>\n</svg>\n";
+  
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.send(200, "image/svg+xml", out);
+}
+
+void drawVoltageGraph() {
+  /*
+  Render voltage graph.
+  */
+  String out = "";
+  float x = 10;
+  char temp[200];
+  out += "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" viewBox=\"0 0 400 150\">\n";
+  out += "<rect width=\"400\" height=\"150\" fill=\"rgb(255, 255, 255, 0.8)\" stroke-width=\"3\" stroke=\"rgb(0, 0, 0)\" />\n";
+  out += "<text x=\"10\" y=\"20\" fill=\"black\">Voltage</text>\n";
+  out += "<g stroke=\"black\"><line x1=\"10\" y1=\"140\" x2=\"390\" y2=\"140\" stroke-width=\"1\" /></g>\n";
+  out += "<text x=\"10\" y=\"134\" fill=\"black\">3</text>\n";
+  out += "<g stroke=\"black\"><line x1=\"10\" y1=\"96.6\" x2=\"390\" y2=\"96.6\" stroke-width=\"1\" /></g>\n";
+  out += "<text x=\"10\" y=\"90.6\" fill=\"black\">4</text>\n";
+  out += "<g stroke=\"black\"><line x1=\"10\" y1=\"53.3\" x2=\"390\" y2=\"53.3\" stroke-width=\"1\" /></g>\n";
+  out += "<text x=\"10\" y=\"47.3\" fill=\"black\">5</text>\n";
+  out += "<g stroke=\"black\"><line x1=\"80\" y1=\"10\" x2=\"390\" y2=\"10\" stroke-width=\"1\" /></g>\n";
+  out += "<g stroke=\"blue\">\n";
+  float y = (voltage_buffer[0]>3)?voltage_buffer[0]:3;
+  for (int i = 1; i < VOLTAGE_BUFFER_SIZE; i++) {
+    float y2 = (voltage_buffer[i]>3)?voltage_buffer[i]:3;
+    sprintf(temp, "<line x1=\"%.2f\" y1=\"%.2f\" x2=\"%.2f\" y2=\"%.2f\" stroke-width=\"1\" />\n", x, GRAPH_HEIGHT - GRAPH_PADDING - ((y-3)*43.33), x + voltage_x_interval, GRAPH_HEIGHT - GRAPH_PADDING - ((y2-3)*43.33));
+    out += temp;
+    y = y2;
+    x += voltage_x_interval;
   }
   out += "</g>\n</svg>\n";
   
@@ -425,6 +498,18 @@ void processTemperature(){
   }
 }
 
+void processVoltage(){
+  /*
+  Update the voltage buffer every VOLTAGE_PERIOD time.
+  */
+  if(voltage_){
+    voltage_--;
+  }else{
+    voltage_ = VOLTAGE_PERIOD;
+    updateVoltageBuffer();
+  }
+}
+
 void processFeeder(){
   /*
   Activate feeder.
@@ -449,6 +534,7 @@ void timerISR(){
     digitalWrite(AIR_PUMP_PIN,processAirPump());
     if(feeder) feeder--;
     processTemperature();
+    processVoltage();
   }else{
     digitalWrite(LED_BUILTIN,!digitalRead(LED_BUILTIN));
   }
@@ -495,6 +581,8 @@ void setup(void) {
   eepromRead();
 
   // Init Pins
+  pinMode(LEVEL_PIN_1, INPUT);
+  pinMode(LEVEL_PIN_2, INPUT);
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN,LOW);
   pinMode(PUMP_PIN, OUTPUT);
@@ -534,10 +622,14 @@ void setup(void) {
 
   // Web Server
   server.on("/", handleRoot);
-  server.on("/temperature.svg", drawGraph);
+  server.on("/temperature.svg", drawTemperatureGraph);
+  server.on("/voltage.svg", drawVoltageGraph);
   server.onNotFound(handleNotFound);
   server.begin();
   Serial.println("HTTP server started");
+
+  updateTemperature();
+  getVoltage();
   
   //Reattach Ticker every 1s
   ticker.attach(1, timerISR);

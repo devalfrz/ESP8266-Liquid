@@ -2,7 +2,7 @@
 <html lang="en-us">
 <head>
     <meta http-equiv="content-type" content="text/html; charset=utf-8">
-    <title>Liquid 2.0</title>
+    <title>Liquid 2</title>
     <style>
 .header{
   grid-area: header;
@@ -126,20 +126,24 @@ input[type="number"],input[type="text"]{
   </head>
   <body>
     <div class="header">
-      <h1>Liquid 2.0</h1>
+      <h1>Liquid 2</h1>
     </div>
     <div class="main">
       <form method="POST" action=".">
         <div class="data">
         <pre>Status:         <span id="status"></span>
+Firmware:       <span id="firmware_version"></span>
+Firmware Date:  <span id="firmware_date"></span>
 Uptime:         <span id="uptime"></span>
 Level:          <span id="level"></span>
 Temperature:    <span id="temperature"></span>&#8451;
+Voltage:        <span id="voltage"></span>v
 Mode:           <span id="day_time"></span>
 Pump:           <span id="pump"></span>
 Air Pump:       <span id="air_pump"></span>
 Feed:           <span id="feeder"></span></pre>
-          <div id="graph"></div>
+          <div id="temperature_graph"></div>
+          <div id="voltage_graph"></div>
           <h3>Toggle</h3>
           <div class="toggles">
             <a href=".?pump=toggle" class="toggle">Water Pump</a>
@@ -200,6 +204,9 @@ var updateVars = function(){
       document.getElementById('day_time').className = "night";
   }
   document.getElementById('temperature').innerHTML = response_data.temperature;
+  document.getElementById('voltage').innerHTML = response_data.voltage;
+  document.getElementById('firmware_version').innerHTML = response_data.firmware;
+  document.getElementById('firmware_date').innerHTML = response_data.firmware_date;
   
 }
 
@@ -245,8 +252,10 @@ var init = function(){
   };
   xhttp.open("GET", url, true);
   xhttp.send();
-  updateGraph();
-  setInterval(function(){ updateGraph(); }, 108000);
+  updateGraph('temperature.svg','temperature_graph');
+  updateGraph('voltage.svg','voltage_graph');
+  setInterval(function(){ updateGraph('temperature.svg','temperature_graph'); }, 1800000);
+  setInterval(function(){ updateGraph('voltage.svg','voltage_graph'); },         180000);
 }
 
 var saveData = function(e){
@@ -293,7 +302,7 @@ var updateData = function(){
   xhttp.send();
 }
 
-var updateGraph = function(){
+var updateGraph = function(graph_name,container_id){
 
   conn_status = 0;
   document.getElementById('status').innerHTML = " Loading... ";
@@ -302,13 +311,13 @@ var updateGraph = function(){
   var xhttp = new XMLHttpRequest();
   xhttp.onreadystatechange = function() {
     if (this.readyState == 4 && this.status == 200) {
-      document.getElementById('graph').innerHTML = xhttp.response;
+      document.getElementById(container_id).innerHTML = xhttp.response;
       conn_status = 1;
       document.getElementById('status').innerHTML = " Online ";
       document.getElementById('status').className = "ok";
     }
   };
-  xhttp.open("GET", url+'temperature.svg', true);
+  xhttp.open("GET", url+graph_name, true);
   xhttp.send();
 }
 
