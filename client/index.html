@@ -5,28 +5,15 @@
     <title>Liquid 2</title>
     <style>
 .header{
-  grid-area: header;
   text-align: center;
 }
-.main{
-  grid-area: main;
-  text-align: left;
-}
 .footer{
-  grid-area: footer;
   text-align: right;
 }
 
 body{
   font-family: Verdana, Geneva, sans-serif;
   background-color: lightblue;
-  display: grid;
-  grid-template-columns: auto;
-  grid-template-rows: 1fr 5fr 3fr;
-  grid-template-areas: 
-    "header"
-    "main"
-    "footer";
 }
 
 a{
@@ -348,7 +335,11 @@ var toggle = function(e){
 var getTimeStr = function(seconds){
     var date = new Date(1970,0,1);
     date.setSeconds(seconds);
-    return date.toTimeString().replace(/.*(\d{2}:\d{2}:\d{2}).*/, '$1');
+    var time_str = date.toTimeString().replace(/.*(\d{2}:\d{2}:\d{2}).*/, '$1');
+    var days = Math.floor(seconds/(24*60*60))
+    var day_str = days + ((days>1)?" Days ":" Day ");
+    if(days) time_str = day_str + time_str;
+    return time_str;
 }
 
 var displayTime = function(var_name, count_up){
